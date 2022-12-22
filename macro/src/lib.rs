@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::quote;
-use syn::{
-    parse::Parse, parse_macro_input, parse_quote_spanned, visit_mut::VisitMut, ExprTry, Stmt,
-};
+use rand::{thread_rng, Rng};
+use syn::{parse::Parse, parse_macro_input, visit_mut::VisitMut, ExprTry, Stmt};
 
 #[proc_macro]
 pub fn try_(input: TokenStream) -> TokenStream {
@@ -12,10 +12,16 @@ pub fn try_(input: TokenStream) -> TokenStream {
         stmts,
     };
 
-    TryVisitor.visit_block_mut(&mut block);
+    let id = thread_rng().gen_range(1000..=9999);
+    let id = syn::Ident::new(&format!("try_polyfill_label_{id}"), Span::call_site());
+    let id = syn::Lifetime {
+        apostrophe: Span::call_site(),
+        ident: id,
+    };
+    TryVisitor(id.clone()).visit_block_mut(&mut block);
 
     quote! {
-        'try_polyfill: {
+        #id: {
             ::try_polyfill::Try::from_continue(#block)
         }
     }
@@ -32,7 +38,21 @@ impl Parse for Block {
     }
 }
 
-struct TryVisitor;
+struct TryVisitor(syn::Lifetime);
+
+macro_rules! path {
+    ($span:expr => $(::$x:ident)+) => {
+        syn::Path {
+            leading_colon: Some(syn::token::Colon2($span)),
+            segments: syn::punctuated::Punctuated::from_iter([$(
+                syn::PathSegment {
+                    ident: syn::Ident::new(stringify!($x), $span),
+                    arguments: syn::PathArguments::None,
+                },
+            )*]),
+        }
+    };
+}
 
 impl VisitMut for TryVisitor {
     fn visit_expr_mut(&mut self, i: &mut syn::Expr) {
@@ -41,14 +61,99 @@ impl VisitMut for TryVisitor {
             syn::Expr::Try(ExprTry {
                 expr,
                 question_token,
-                ..
+                attrs,
             }) => {
-                *i = parse_quote_spanned!(question_token.span =>
-                    match ::try_polyfill::__private::branch(#expr) {
-                        ::try_polyfill::__private::ControlFlow::Break(b) => break 'try_polyfill b,
-                        ::try_polyfill::__private::ControlFlow::Continue(c) => c,
-                    }
-                )
+                syn::visit_mut::visit_expr_mut(self, expr);
+                *i = syn::Expr::Match(syn::ExprMatch {
+                    attrs: std::mem::take(attrs),
+                    match_token: syn::token::Match(question_token.span),
+                    expr: Box::new(syn::Expr::Call(syn::ExprCall {
+                        attrs: Vec::new(),
+                        func: Box::new(syn::Expr::Path(syn::ExprPath {
+                            attrs: Vec::new(),
+                            qself: None,
+                            path: path!(question_token.span => ::try_polyfill::__private::branch),
+                        })),
+                        paren_token: syn::token::Paren(question_token.span),
+                        args: syn::punctuated::Punctuated::from_iter([std::mem::replace::<
+                            syn::Expr,
+                        >(
+                            expr,
+                            syn::Expr::Verbatim(Default::default()),
+                        )]),
+                    })),
+                    brace_token: syn::token::Brace(question_token.span),
+                    arms: vec![
+                        syn::Arm {
+                            attrs: Vec::new(),
+                            pat: syn::Pat::TupleStruct(syn::PatTupleStruct {
+                                attrs: Vec::new(),
+                                path: path!(question_token.span => ::try_polyfill::__private::ControlFlow::Break),
+                                pat: syn::PatTuple {
+                                    attrs: Vec::new(),
+                                    paren_token: syn::token::Paren(question_token.span),
+                                    elems: syn::punctuated::Punctuated::from_iter([
+                                        syn::Pat::Ident(syn::PatIdent {
+                                            attrs: Vec::new(),
+                                            by_ref: None,
+                                            mutability: None,
+                                            ident: syn::Ident::new("b", question_token.span),
+                                            subpat: None,
+                                        }),
+                                    ]),
+                                },
+                            }),
+                            guard: None,
+                            fat_arrow_token: syn::token::FatArrow(question_token.span),
+                            body: Box::new(syn::Expr::Break(syn::ExprBreak {
+                                attrs: Vec::new(),
+                                break_token: syn::token::Break(question_token.span),
+                                label: Some(self.0.clone()),
+                                expr: Some(Box::new(syn::Expr::Path(syn::ExprPath {
+                                    attrs: Vec::new(),
+                                    qself: None,
+                                    path: syn::Ident::new("b", question_token.span).into(),
+                                }))),
+                            })),
+                            comma: Some(syn::token::Comma(question_token.span)),
+                        },
+                        syn::Arm {
+                            attrs: Vec::new(),
+                            pat: syn::Pat::TupleStruct(syn::PatTupleStruct {
+                                attrs: Vec::new(),
+                                path: path!(question_token.span => ::try_polyfill::__private::ControlFlow::Continue),
+                                pat: syn::PatTuple {
+                                    attrs: Vec::new(),
+                                    paren_token: syn::token::Paren(question_token.span),
+                                    elems: syn::punctuated::Punctuated::from_iter([
+                                        syn::Pat::Ident(syn::PatIdent {
+                                            attrs: Vec::new(),
+                                            by_ref: None,
+                                            mutability: None,
+                                            ident: syn::Ident::new("c", question_token.span),
+                                            subpat: None,
+                                        }),
+                                    ]),
+                                },
+                            }),
+                            guard: None,
+                            fat_arrow_token: syn::token::FatArrow(question_token.span),
+                            body: Box::new(syn::Expr::Path(syn::ExprPath {
+                                attrs: Vec::new(),
+                                qself: None,
+                                path: syn::Ident::new("c", question_token.span).into(),
+                            })),
+                            comma: Some(syn::token::Comma(question_token.span)),
+                        },
+                    ],
+                });
+
+                // *i = parse_quote_spanned!(question_token.span =>
+                //     match ::try_polyfill::__private::branch(#expr) {
+                //         ::try_polyfill::__private::ControlFlow::Break(b) => break 'try_polyfill_label b,
+                //         ::try_polyfill::__private::ControlFlow::Continue(c) => c,
+                //     }
+                // )
             }
             // ignore these any deeper, as they all should have their own try context
             syn::Expr::Async(_)

@@ -15,6 +15,9 @@ mod tests {
     }
 
     fn demo<T: Try<Continue = i32>>(t: T) -> T {
-        try_! { let val = t?; val + 1 }
+        try_! {
+            let val = try_! { t? }?;
+            val + 1
+        }
     }
 }
